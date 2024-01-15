@@ -1,0 +1,85 @@
+name: Reusable workflow for adding a PR comment with a plan
+
+on:
+  workflow_call:
+    inputs:
+      PLAN:
+        description: "The Terraform plan output text"
+        required: true
+        type: string
+      PLAN_OUTCOME:
+        description: "The Terraform plan status"
+        required: true
+        type: string
+      ENVIRONMENT:
+        description: "The environment this plan is targeting"
+        required: true
+        type: string
+
+jobs:
+  terraform_plan_pr_comment:
+    name: Terraform Plan PR Comment
+    runs-on: [ubuntu-latest]
+
+    steps:
+      - name: Delete old comments
+        continue-on-error: true
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const allComments = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            var envPlanComments = allComments.data.filter((comment) => {
+              return comment.body.includes("Plan outcome for ${{ inputs.ENVIRONMENT }}:")
+            });
+            envPlanComments.forEach((comment) => {
+              github.rest.issues.deleteComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: comment.id,
+              });
+            })
+
+      # Reformat the plan to move the '+' and '-' to the beginning of the line
+      # This allows for the use of '```diff' which will highlight '+' as green and '-' as red
+      # https://blog.testdouble.com/posts/2021-12-07-elevate-your-terraform-workflow-with-github-actions/
+      # also - must escape backticks 
+      - name: Reformat Plan
+        run: |
+          echo '${{ inputs.PLAN }}' \
+          | sed -E 's/^([[:space:]]+)([-+])/\2\1/g' \
+          | sed 's/`/\\`/g' > plan.txt
+      
+      - name: Put Plan in Env Var
+        run: |
+          PLAN=$(cat plan.txt)
+          echo "PLAN<<EOF" >> $GITHUB_ENV
+          echo "$PLAN" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV      
+      
+      - name: Add PR comment
+        uses: actions/github-script@v6.4.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `
+            ## :page_facing_up: Plan outcome for ${{ inputs.ENVIRONMENT }}: \`${{ inputs.PLAN_OUTCOME }}\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`diff\n
+            ${{ env.PLAN }}
+            \`\`\`
+            </details>
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
