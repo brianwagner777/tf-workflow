@@ -86,7 +86,7 @@ jobs:
       - name: Terraform Validate
         id: validate
         working-directory: ${{ inputs.TERRAFORM_DIRECTORY }}
-        run: terraform validate
+        run: terraform validate -no-color
 
       - name: Azure CLI Login
         run: |
@@ -97,8 +97,8 @@ jobs:
         id: plan
         working-directory: ${{ inputs.TERRAFORM_DIRECTORY }}
         run: | 
-          terraform plan -input=false -out=plan.tfplan \
-          && terraform show plan.tfplan
+          terraform plan -no-color -input=false -out=plan.tfplan \
+          && terraform show -no-color plan.tfplan
         continue-on-error: true
 
       - name: Plan Summary
