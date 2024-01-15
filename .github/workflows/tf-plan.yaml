@@ -1,0 +1,156 @@
+name: Reusable workflow for running a plan
+
+on:
+  workflow_call:
+    inputs:
+      ARM_CLIENT_ID:
+        description: "Service Principal application id"
+        required: true
+        type: string
+      ARM_SUBSCRIPTION_ID:
+        description: "Subscription Id"
+        required: true
+        type: string
+      ARM_TENANT_ID:
+        description: "Tenant Id"
+        required: false
+        type: string
+      TERRAFORM_DIRECTORY:
+        description: "The relative directory of of the plan to run (ex: ./environments/dev)"
+        required: true
+        type: string  
+      PLAN_ARTIFACT_NAME:
+        description: "Name of artifact that is produced by this workflow"
+        required: true
+        type: string
+      GITHUB_ENVIRONMENT:
+        description: "Name of the GitHub Environment. Used if approvals are required."
+        required: false
+        type: string
+        default: null
+      SUPPRESS_PLAN_OUTPUT:
+        description: "If true, will skip the Terraform Plan Output step"
+        required: false
+        type: boolean
+        default: false
+      FAIL_JOB_ON_PLAN_FAIL:
+        description: "If true, will fail the job if the plan fails"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      ARM_CLIENT_SECRET:
+        description: "SP password"
+        required: true
+    outputs:
+      PLAN:
+        description: "The Terraform plan output text"
+        value: ${{ jobs.terraform_plan.outputs.PLAN }}
+      PLAN_OUTCOME:
+        description: "The Terraform plan status"
+        value: ${{ jobs.terraform_plan.outputs.PLAN_OUTCOME }}
+
+jobs:
+  terraform_plan:
+    name: Terraform Plan
+    runs-on: [ubuntu-latest]
+    environment: ${{ inputs.GITHUB_ENVIRONMENT }}
+    
+    env:
+      ARM_CLIENT_ID: ${{ inputs.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ inputs.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ inputs.ARM_TENANT_ID }}
+
+    outputs:
+      PLAN: ${{ steps.plan-output.outputs.PLAN }}
+      PLAN_OUTCOME: ${{ steps.plan.outcome }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2.0.3
+        with:
+          terraform_wrapper: true
+
+      - name: Terraform Format
+        id: fmt
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        id: init
+        working-directory: ${{ inputs.TERRAFORM_DIRECTORY }}
+        run: terraform init
+      
+      - name: Terraform Validate
+        id: validate
+        working-directory: ${{ inputs.TERRAFORM_DIRECTORY }}
+        run: terraform validate
+
+      - name: Azure CLI Login
+        run: |
+          az login --service-principal -u ${{ env.ARM_CLIENT_ID }} -p ${{ env.ARM_CLIENT_SECRET }} --tenant ${{ env.ARM_TENANT_ID }}
+          az account set -s ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ inputs.TERRAFORM_DIRECTORY }}
+        run: | 
+          terraform plan -input=false -out=plan.tfplan \
+          && terraform show plan.tfplan
+        continue-on-error: true
+
+      - name: Plan Summary
+        id: plan-summary
+        env:
+          PLAN: "${{ steps.plan.outputs.stderr }}\n${{ steps.plan.outputs.stdout }}"
+        run: |
+          # show full plan          
+          echo -e '### Plan: \n ``` terraform \n ${{ env.PLAN }} \n ``` \n' >> "$GITHUB_STEP_SUMMARY"
+        continue-on-error: true
+
+      # Fail job if plan fails (if desired)
+      - name: Fail Job if Plan Fails
+        if: inputs.FAIL_JOB_ON_PLAN_FAIL == true && steps.plan.outcome != 'success'
+        run: |
+            exit 1
+
+      - name: Terraform Plan Output
+        id: plan-output
+        if: inputs.SUPPRESS_PLAN_OUTPUT == false
+        env:
+          PLAN: "${{ steps.plan.outputs.stderr }}\n${{ steps.plan.outputs.stdout }}"
+        run: |
+          # randomized delimiter to prevent script injection
+          delimiter="$(openssl rand -hex 8)"
+          {
+            echo "plan<<${delimiter}"
+            echo '${{ env.PLAN }}'
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compress TF Plan artifact
+        if: steps.plan.outcome == 'success'
+        run: zip -r ${{ inputs.PLAN_ARTIFACT_NAME }}.zip ./* -x "./*/.terraform/*"
+
+      - name: Upload Artifact
+        if: steps.plan.outcome == 'success'
+        uses: actions/upload-artifact@v3.1.2
+        with:
+          name: "${{ inputs.PLAN_ARTIFACT_NAME }}"
+          path: "${{ inputs.PLAN_ARTIFACT_NAME }}.zip"
+
+      - name: Azure CLI Logout
+        if: always()
+        run: |
+          az cache purge
+          az account clear
+      
+        
