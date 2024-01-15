@@ -23,11 +23,6 @@ on:
         description: "Name of artifact that is produced by this workflow"
         required: true
         type: string
-      GITHUB_ENVIRONMENT:
-        description: "Name of the GitHub Environment. Used if approvals are required."
-        required: false
-        type: string
-        default: null
       SUPPRESS_PLAN_OUTPUT:
         description: "If true, will skip the Terraform Plan Output step"
         required: false
@@ -54,7 +49,6 @@ jobs:
   terraform_plan:
     name: Terraform Plan
     runs-on: [ubuntu-latest]
-    environment: ${{ inputs.GITHUB_ENVIRONMENT }}
     
     env:
       ARM_CLIENT_ID: ${{ inputs.ARM_CLIENT_ID }}
