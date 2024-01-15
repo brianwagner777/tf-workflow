@@ -67,6 +67,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const output = `
+            
             ## :page_facing_up: Plan outcome for ${{ inputs.ENVIRONMENT }}: \`${{ inputs.PLAN_OUTCOME }}\`
             
             <details><summary>Show Plan</summary>
